@@ -32,7 +32,7 @@ class DatabaseSeeder extends Seeder
 
         $settings = [
             'business' => ['business_name' => 'Golden Mess', 'business_mobile' => '', 'business_email' => '', 'business_address' => ''],
-            'pricing' => ['breakfast_price' => 0, 'lunch_price' => 0, 'dinner_price' => 0, 'one_time_package_price' => 1700, 'two_time_package_price' => 2700, 'three_time_package_price' => 3700],
+            'pricing' => ['one_time_package_price' => 1700, 'two_time_package_price' => 2700, 'three_time_package_price' => 3700],
             'subscription' => ['default_subscription_days' => 30, 'expiry_alert_days' => 7],
             'system' => ['currency' => '₹', 'timezone' => 'Asia/Kolkata', 'date_format' => 'd-m-Y'],
         ];
