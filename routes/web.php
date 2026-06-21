@@ -49,6 +49,7 @@ Route::middleware(['auth', 'permission'])->group(function () {
         Route::put('/settings', [SettingController::class, 'update'])->name('settings.update');
         Route::resource('holidays', HolidayController::class)->only(['index', 'store', 'update', 'destroy']);
         Route::resource('meal-holds', MealHoldController::class)->only(['index', 'store', 'update', 'destroy']);
+        Route::post('/meal-holds/preview', [MealHoldController::class, 'preview'])->name('meal-holds.preview');
     });
 
     Route::middleware('permission:manage-deliveries')->group(function () {

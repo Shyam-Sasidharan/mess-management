@@ -12,6 +12,7 @@ use App\Services\DeliveryService;
 use App\Services\PaymentService;
 use App\Services\SubscriptionService;
 use App\Services\SubscriptionDateService;
+use App\Services\MealHoldService;
 use Carbon\Carbon;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -101,6 +102,27 @@ class BusinessWorkflowTest extends TestCase
         $this->assertDatabaseHas('deliveries', ['subscription_id' => $subscription->id, 'meal_type' => 'lunch']);
         $this->assertDatabaseMissing('deliveries', ['subscription_id' => $subscription->id, 'meal_type' => 'breakfast']);
         $this->assertSame(0, $subscription->refresh()->meal_hold_compensation_days);
+    }
+
+    public function test_date_range_holds_create_each_date_and_update_duplicates(): void
+    {
+        Carbon::setTestNow('2026-06-22 10:00:00');
+        $subscription = $this->subscription();
+        $service = app(MealHoldService::class);
+        $partial = $service->createDateRangeHold($subscription, '2026-06-23', '2026-06-26', ['breakfast' => 'not_required', 'lunch' => 'required', 'dinner' => null], ['reason' => 'Travel']);
+        $this->assertSame(4, $partial['created']);
+        $this->assertSame(0, $partial['updated']);
+        $this->assertSame(0, $partial['compensation_days']);
+        $this->assertDatabaseCount('customer_meal_holds', 4);
+        $this->assertDatabaseCount('deliveries', 4);
+        $this->assertDatabaseMissing('deliveries', ['subscription_id' => $subscription->id, 'meal_type' => 'breakfast']);
+
+        $full = $service->createDateRangeHold($subscription, '2026-06-23', '2026-06-26', ['breakfast' => 'not_required', 'lunch' => 'not_required', 'dinner' => null], ['reason' => 'Trip extended']);
+        $this->assertSame(0, $full['created']);
+        $this->assertSame(4, $full['updated']);
+        $this->assertSame(4, $full['full_hold_days']);
+        $this->assertDatabaseCount('customer_meal_holds', 4);
+        $this->assertSame(4, $subscription->refresh()->meal_hold_compensation_days);
     }
 
     public function test_admin_can_open_every_primary_operational_screen(): void

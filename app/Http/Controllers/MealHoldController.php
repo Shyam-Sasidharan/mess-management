@@ -8,6 +8,8 @@ use App\Models\Delivery;
 use App\Models\Subscription;
 use App\Services\DeliveryService;
 use App\Services\SubscriptionDateService;
+use App\Services\MealHoldService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -24,19 +26,32 @@ class MealHoldController extends Controller
             ->when($request->place, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)))
             ->latest('hold_date')->paginate(20)->withQueryString();
         $subscriptions = Subscription::with('customer')->whereIn('status', ['active', 'paused'])->orderByDesc('start_date')->get();
-        return view('meal-holds.index', ['holds' => $holds, 'subscriptions' => $subscriptions, 'customers' => Customer::orderBy('name')->get(), 'places' => Customer::whereNotNull('place')->distinct()->orderBy('place')->pluck('place')]);
+        $dates = app(SubscriptionDateService::class);
+        $subscriptionSummaries = $subscriptions->mapWithKeys(function ($subscription) use ($dates) {
+            $metrics = $dates->metrics($subscription);
+            return [$subscription->id => ['customer' => $subscription->customer->name, 'mobile' => $subscription->customer->primary_mobile, 'start' => $subscription->start_date->format('d M Y'), 'end' => $subscription->end_date->format('d M Y'), 'start_iso' => $subscription->start_date->toDateString(), 'end_iso' => $subscription->end_date->toDateString(), 'meals' => $subscription->meal_names, 'meal_flags' => ['breakfast' => $subscription->breakfast, 'lunch' => $subscription->lunch, 'dinner' => $subscription->dinner], 'remaining' => $metrics['remaining_service_days']]];
+        });
+        return view('meal-holds.index', ['holds' => $holds, 'subscriptions' => $subscriptions, 'subscriptionSummaries' => $subscriptionSummaries, 'customers' => Customer::orderBy('name')->get(), 'places' => Customer::whereNotNull('place')->distinct()->orderBy('place')->pluck('place')]);
     }
 
-    public function store(Request $request, SubscriptionDateService $dates, DeliveryService $deliveries): RedirectResponse
+    public function store(Request $request, MealHoldService $service): RedirectResponse
     {
-        $data = $this->data($request);
+        $data = $this->rangeData($request);
         $subscription = Subscription::findOrFail($data['subscription_id']);
-        $this->guard($subscription, $data);
-        $hold = new CustomerMealHold($data + ['customer_id' => $subscription->customer_id, 'created_by' => $request->user()->id]);
-        $hold->is_full_day_hold = $dates->isFullDayHold($subscription, $hold);
-        $hold->save();
-        $this->refresh($hold, $dates, $deliveries);
-        return back()->with('success', 'Meal requirement saved and subscription recalculated.');
+        [$from, $to] = $this->selectedDates($data);
+        $result = $data['selection_mode'] === 'single'
+            ? $service->createSingleDateHold($subscription, $from, $data['meal_statuses'], $data, $request->user()->id)
+            : $service->createDateRangeHold($subscription, $from, $to, $data['meal_statuses'], $data, $request->user()->id);
+        $message = "Meal holds saved for {$result['days']} day(s): {$result['created']} created, {$result['updated']} updated, {$result['compensation_days']} compensated.";
+        return back()->with('success', $message);
+    }
+
+    public function preview(Request $request, MealHoldService $service): JsonResponse
+    {
+        $data = $this->rangeData($request);
+        $subscription = Subscription::findOrFail($data['subscription_id']);
+        [$from, $to] = $this->selectedDates($data);
+        return response()->json($service->generatePreview($subscription, $from, $to, $data['meal_statuses']));
     }
 
     public function update(Request $request, CustomerMealHold $mealHold, SubscriptionDateService $dates, DeliveryService $deliveries): RedirectResponse
@@ -74,6 +89,24 @@ class MealHoldController extends Controller
         ]);
         foreach (['breakfast', 'lunch', 'dinner'] as $meal) $data[$meal.'_required'] = $request->boolean($meal.'_required');
         return $data;
+    }
+
+    private function rangeData(Request $request): array
+    {
+        $data = $request->validate([
+            'subscription_id' => ['required', 'exists:subscriptions,id'], 'selection_mode' => ['required', 'in:single,range'],
+            'hold_date' => ['required_if:selection_mode,single', 'nullable', 'date'], 'from_date' => ['required_if:selection_mode,range', 'nullable', 'date'],
+            'to_date' => ['required_if:selection_mode,range', 'nullable', 'date', 'after_or_equal:from_date'],
+            'breakfast_status' => ['nullable', 'in:required,not_required'], 'lunch_status' => ['nullable', 'in:required,not_required'], 'dinner_status' => ['nullable', 'in:required,not_required'],
+            'reason' => ['nullable', 'string', 'max:255'], 'notes' => ['nullable', 'string', 'max:3000'],
+        ]);
+        $data['meal_statuses'] = collect(['breakfast','lunch','dinner'])->mapWithKeys(fn ($meal) => [$meal => $request->input($meal.'_status')])->all();
+        return $data;
+    }
+
+    private function selectedDates(array $data): array
+    {
+        return $data['selection_mode'] === 'single' ? [$data['hold_date'], $data['hold_date']] : [$data['from_date'], $data['to_date']];
     }
 
     private function guard(Subscription $subscription, array $data, ?CustomerMealHold $current = null): void
