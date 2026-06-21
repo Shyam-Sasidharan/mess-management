@@ -59,7 +59,7 @@ return new class extends Migration
             $table->unsignedTinyInteger('meal_count');
             $table->enum('package_type', ['one_time', 'two_time', 'three_time']);
             $table->decimal('amount', 12, 2);
-            $table->enum('payment_status', ['paid', 'partial', 'pending'])->default('pending')->index();
+            $table->enum('payment_status', ['paid', 'partial', 'pending', 'overpaid'])->default('pending')->index();
             $table->enum('status', ['active', 'expired', 'paused', 'cancelled'])->default('active')->index();
             $table->timestamp('paused_at')->nullable();
             $table->timestamp('resumed_at')->nullable();
@@ -85,11 +85,13 @@ return new class extends Migration
         Schema::create('payments', function (Blueprint $table) {
             $table->id();
             $table->string('receipt_no', 30)->unique();
+            $table->uuid('transaction_token')->nullable()->unique();
             $table->foreignId('customer_id')->constrained()->cascadeOnDelete();
             $table->foreignId('subscription_id')->nullable()->constrained()->nullOnDelete();
             $table->date('payment_date')->index();
             $table->decimal('amount', 12, 2);
             $table->enum('method', ['cash', 'bank', 'upi', 'card', 'other'])->default('cash');
+            $table->enum('payment_type', ['full', 'partial'])->default('partial');
             $table->text('notes')->nullable();
             $table->foreignId('created_by')->nullable()->constrained('users')->nullOnDelete();
             $table->timestamps();

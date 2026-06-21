@@ -37,10 +37,12 @@ class CustomerController extends Controller
 
     public function show(Customer $customer, \App\Services\SubscriptionDateService $dates): View
     {
-        $customer->load(['subscriptions.payments', 'subscriptions.compensations', 'payments', 'mealHolds', 'deliveries' => fn ($q) => $q->latest('delivery_date')->limit(30)]);
+        $customer->load(['subscriptions.payments', 'subscriptions.compensations', 'payments', 'mealHolds']);
+        $recentDeliveryDays = $customer->deliveries()->latest('delivery_date')->latest('id')->limit(60)->get()
+            ->groupBy(fn ($delivery) => $delivery->delivery_date->toDateString())->take(10);
         $currentSubscription = $customer->subscriptions->sortByDesc('id')->first();
         $subscriptionMetrics = $currentSubscription ? $dates->metrics($currentSubscription) : null;
-        return view('customers.show', compact('customer', 'currentSubscription', 'subscriptionMetrics'));
+        return view('customers.show', compact('customer', 'currentSubscription', 'subscriptionMetrics', 'recentDeliveryDays'));
     }
 
     public function edit(Customer $customer): View { return view('customers.edit', compact('customer')); }
@@ -57,7 +59,13 @@ class CustomerController extends Controller
         return redirect()->route('customers.index')->with('success', 'Customer archived.');
     }
 
-    public function renew(Customer $customer): View { return view('customers.renew', ['customer' => $customer, 'defaults' => $this->subscriptionDefaults()]); }
+    public function renew(Customer $customer, \App\Services\PaymentService $payments): View
+    {
+        $previous = $customer->subscriptions()->latest('id')->first();
+        $renewalStartDate = $previous ? $previous->end_date->copy()->addDay()->max(today())->toDateString() : today()->toDateString();
+        $oldSubscriptionBalance = $payments->customerDueBreakdown($customer)['total_payable'];
+        return view('customers.renew', ['customer' => $customer, 'previous' => $previous, 'defaults' => $this->subscriptionDefaults(), 'renewalStartDate' => $renewalStartDate, 'oldSubscriptionBalance' => $oldSubscriptionBalance]);
+    }
 
     public function storeRenewal(SubscriptionRequest $request, Customer $customer): RedirectResponse
     {

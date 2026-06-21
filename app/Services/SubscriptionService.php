@@ -32,7 +32,7 @@ class SubscriptionService
     {
         return DB::transaction(function () use ($customer, $data, $userId) {
             $previous = $customer->subscriptions()->latest('id')->first();
-            if ($previous?->status === 'active') $previous->update(['status' => 'expired']);
+            if ($previous && Carbon::parse($data['start_date'])->lte($previous->end_date)) throw ValidationException::withMessages(['start_date' => 'Renewal must start after the previous final extended end date of '.$previous->end_date->format('d-m-Y').'.']);
             $subscription = $this->create($customer, $data, $userId);
             SubscriptionRenewal::create([
                 'customer_id' => $customer->id,

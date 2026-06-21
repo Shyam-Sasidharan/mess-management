@@ -27,6 +27,7 @@ Route::middleware('guest')->group(function () {
 
 Route::middleware(['auth', 'permission'])->group(function () {
     Route::get('/', DashboardController::class)->name('dashboard');
+    Route::get('/dashboard/summary', [DashboardController::class, 'summary'])->name('dashboard.summary');
     Route::post('/logout', [AuthController::class, 'destroy'])->name('logout');
     Route::get('/search', SearchController::class)->name('search');
     Route::get('/notifications', [NotificationController::class, 'index'])->name('notifications.index');
@@ -39,7 +40,7 @@ Route::middleware(['auth', 'permission'])->group(function () {
         Route::post('/customers/{customer}/renew', [CustomerController::class, 'storeRenewal'])->name('customers.renew.store');
         Route::patch('/customers/{customer}/pause', [CustomerController::class, 'pause'])->name('customers.pause');
         Route::patch('/customers/{customer}/resume', [CustomerController::class, 'resume'])->name('customers.resume');
-        Route::resource('payments', PaymentController::class)->only(['index', 'store', 'update', 'destroy']);
+        Route::resource('payments', PaymentController::class)->only(['index', 'store']);
         Route::resource('expenses', ExpenseController::class)->except(['show']);
         Route::get('/expenses/{expense}/bill', [ExpenseController::class, 'bill'])->name('expenses.bill');
         Route::post('/expense-categories', [ExpenseCategoryController::class, 'store'])->name('expense-categories.store');

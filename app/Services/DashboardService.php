@@ -3,72 +3,136 @@
 namespace App\Services;
 
 use App\Models\Customer;
+use App\Models\CustomerMealHold;
 use App\Models\Delivery;
 use App\Models\Expense;
+use App\Models\Holiday;
 use App\Models\Payment;
 use App\Models\Subscription;
 use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
 class DashboardService
 {
+    public function __construct(private SubscriptionDateService $subscriptionDates) {}
+
     public function data(array $filters = []): array
     {
-        $date = Carbon::parse($filters['date'] ?? today());
+        $date = Carbon::parse($filters['date'] ?? today())->startOfDay();
         $month = (int) ($filters['month'] ?? $date->month);
         $year = (int) ($filters['year'] ?? $date->year);
-        $customers = Customer::query()->when($filters['status'] ?? null, fn ($q, $v) => $q->where('status', $v))->when($filters['place'] ?? null, fn ($q, $v) => $q->where('place', $v));
-        $subscriptions = Subscription::query()->when($filters['payment_status'] ?? null, fn ($q, $v) => $q->where('payment_status', $v))->when($filters['status'] ?? null, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('status', $v)))->when($filters['place'] ?? null, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)));
-        $payments = Payment::query()->when($filters['payment_status'] ?? null, fn ($q, $v) => $q->whereHas('subscription', fn ($q) => $q->where('payment_status', $v)))->when($filters['status'] ?? null, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('status', $v)))->when($filters['place'] ?? null, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)));
-        $todayDeliveries = Delivery::whereDate('delivery_date', $date)->when($filters['meal_type'] ?? null, fn ($q, $v) => $q->where('meal_type', $v))->when($filters['place'] ?? null, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)));
-        $monthlyRevenue = (clone $payments)->whereYear('payment_date', $year)->whereMonth('payment_date', $month)->sum('amount');
-        $monthlyExpense = Expense::whereYear('expense_date', $year)->whereMonth('expense_date', $month)->sum('amount');
-        $outstanding = (clone $subscriptions)->whereIn('payment_status', ['pending', 'partial'])->get()->sum('outstanding_amount');
+        $customers = $this->customerQuery($filters);
+        $subscriptions = $this->subscriptionQuery($filters);
+        $payments = $this->paymentQuery($filters)
+            ->when($filters['from'] ?? null, fn ($query, $from) => $query->whereDate('payment_date', '>=', $from))
+            ->when($filters['to'] ?? null, fn ($query, $to) => $query->whereDate('payment_date', '<=', $to));
+        $expenses = Expense::query()->when($filters['from'] ?? null, fn ($query, $from) => $query->whereDate('expense_date', '>=', $from))->when($filters['to'] ?? null, fn ($query, $to) => $query->whereDate('expense_date', '<=', $to));
 
-        $monthly = collect(range(1, 12))->map(function ($m) use ($year, $payments, $filters) {
-            $revenue = (float) (clone $payments)->whereYear('payment_date', $year)->whereMonth('payment_date', $m)->sum('amount');
-            $expense = (float) Expense::whereYear('expense_date', $year)->whereMonth('expense_date', $m)->sum('amount');
-            $customerGrowth = Customer::when($filters['status'] ?? null, fn ($q, $v) => $q->where('status', $v))->when($filters['place'] ?? null, fn ($q, $v) => $q->where('place', $v))->whereYear('created_at', $year)->whereMonth('created_at', $m)->count();
-            return ['label' => Carbon::create($year, $m)->format('M'), 'revenue' => $revenue, 'expense' => $expense, 'profit' => $revenue - $expense, 'customers' => $customerGrowth];
-        });
+        $isHoliday = $this->subscriptionDates->isHoliday($date);
+        $deliveryQuery = Delivery::whereDate('delivery_date', $date)
+            ->when($filters['meal_type'] ?? null, fn ($query, $meal) => $query->where('meal_type', $meal))
+            ->when($filters['place'] ?? null, fn ($query, $place) => $query->whereHas('customer', fn ($q) => $q->where('place', $place)));
+        $deliveryRows = $isHoliday ? collect() : (clone $deliveryQuery)->select('meal_type', 'status', DB::raw('COUNT(*) total'))->groupBy('meal_type', 'status')->get();
+        $deliveryStats = collect(['breakfast', 'lunch', 'dinner'])->mapWithKeys(function ($meal) use ($deliveryRows) {
+            $rows = $deliveryRows->where('meal_type', $meal)->pluck('total', 'status');
+            return [$meal => ['total' => (int) $rows->sum(), 'pending' => (int) ($rows['pending'] ?? 0), 'delivered' => (int) ($rows['delivered'] ?? 0), 'exceptions' => (int) (($rows['missed'] ?? 0) + ($rows['skipped'] ?? 0))]];
+        })->all();
 
-        $categoryExpenses = Expense::query()->join('expense_categories', 'expenses.expense_category_id', '=', 'expense_categories.id')
+        $monthlyRevenue = (float) (clone $payments)->whereYear('payment_date', $year)->whereMonth('payment_date', $month)->sum('amount');
+        $monthlyExpense = (float) (clone $expenses)->whereYear('expense_date', $year)->whereMonth('expense_date', $month)->sum('amount');
+        $previous = Carbon::create($year, $month)->subMonthNoOverflow();
+        $previousRevenue = (float) (clone $payments)->whereYear('payment_date', $previous->year)->whereMonth('payment_date', $previous->month)->sum('amount');
+        $previousExpense = (float) (clone $expenses)->whereYear('expense_date', $previous->year)->whereMonth('expense_date', $previous->month)->sum('amount');
+        $outstandingSubscriptions = (clone $subscriptions)->whereIn('payment_status', ['pending', 'partial'])->withSum('payments', 'amount')->get(['id', 'amount']);
+        $outstanding = $outstandingSubscriptions->sum(fn ($subscription) => max(0, (float) $subscription->amount - (float) $subscription->payments_sum_amount));
+        $paymentStatusCounts = (clone $subscriptions)->select('payment_status', DB::raw('COUNT(*) total'))->groupBy('payment_status')->pluck('total', 'payment_status');
+        $expiredUnpaidCount = (clone $subscriptions)->where('status', 'expired')->whereIn('payment_status', ['pending', 'partial'])->count();
+        $expiringUnpaidCount = (clone $subscriptions)->where('status', 'active')->whereIn('payment_status', ['pending', 'partial'])->whereBetween('end_date', [$date, $date->copy()->addDays((int) \App\Models\Setting::value('expiry_alert_days', 7))])->count();
+
+        $monthly = $this->monthlySeries($payments, $expenses, $year);
+        $categoryExpenses = (clone $expenses)->join('expense_categories', 'expenses.expense_category_id', '=', 'expense_categories.id')
             ->whereYear('expense_date', $year)->whereMonth('expense_date', $month)
             ->select('expense_categories.name', 'expense_categories.color', DB::raw('SUM(expenses.amount) total'))
             ->groupBy('expense_categories.id', 'expense_categories.name', 'expense_categories.color')->orderByDesc('total')->get();
-        $plans = (clone $subscriptions)->when($filters['meal_type'] ?? null, fn ($q, $v) => $q->where($v, true))->select('package_type', DB::raw('COUNT(*) total'))->groupBy('package_type')->get();
-        $currentMonth = $monthly->firstWhere('label', Carbon::create($year, $month)->format('M'));
-        $previousMonth = $monthly->get(max(0, $month - 2));
-        $growth = fn (float $current, float $previous) => $previous == 0.0 ? ($current > 0 ? 100.0 : 0.0) : round((($current - $previous) / $previous) * 100, 1);
+        $plans = (clone $subscriptions)->when($filters['meal_type'] ?? null, fn ($query, $meal) => $query->where($meal, true))
+            ->select('package_type', DB::raw('COUNT(*) total'))->groupBy('package_type')->get();
+
+        $expiryQuery = Subscription::with('customer')->where('status', 'active')
+            ->when($filters['place'] ?? null, fn ($query, $place) => $query->whereHas('customer', fn ($q) => $q->where('place', $place)));
+        $expiringToday = (clone $expiryQuery)->whereDate('end_date', $date)->orderBy('end_date')->limit(5)->get();
+        $expiring = (clone $expiryQuery)->whereBetween('end_date', [$date->copy()->addDay(), $date->copy()->addDays(7)])->orderBy('end_date')->limit(6)->get();
+        $pendingCustomers = (clone $subscriptions)->with('customer')->withSum('payments', 'amount')->whereIn('payment_status', ['pending', 'partial'])->orderBy('end_date')->limit(6)->get()
+            ->each(fn ($subscription) => $subscription->setAttribute('computed_outstanding', max(0, (float) $subscription->amount - (float) $subscription->payments_sum_amount)));
+        $mealHoldCount = CustomerMealHold::whereDate('hold_date', $date)->when($filters['place'] ?? null, fn ($query, $place) => $query->whereHas('customer', fn ($q) => $q->where('place', $place)))->count();
+
+        $currentHoliday = Holiday::active()->whereDate('holiday_date', $date)->first();
+        $nextExplicitHoliday = Holiday::active()->whereDate('holiday_date', '>', $date)->orderBy('holiday_date')->first();
+        $nextSunday = $date->copy()->next(Carbon::SUNDAY);
+        $nextHolidayDate = $nextExplicitHoliday && $nextExplicitHoliday->holiday_date->lt($nextSunday) ? $nextExplicitHoliday->holiday_date : $nextSunday;
+        $nextHolidayTitle = $nextExplicitHoliday && $nextExplicitHoliday->holiday_date->isSameDay($nextHolidayDate) ? $nextExplicitHoliday->title : 'Weekly Sunday';
+
+        $profit = $monthlyRevenue - $monthlyExpense;
+        $growth = fn (float $current, float $old) => $old == 0.0 ? ($current > 0 ? 100.0 : 0.0) : round((($current - $old) / $old) * 100, 1);
+        $activeCustomers = (clone $customers)->where('status', 'active')->count();
+        $deliveryTotal = array_sum(array_column($deliveryStats, 'total'));
 
         return [
+            'filterDate' => $date,
             'cards' => [
-                'total_customers' => (clone $customers)->count(), 'active_customers' => (clone $customers)->where('status', 'active')->count(),
-                'expired_customers' => (clone $customers)->where('status', 'expired')->count(),
-                'new_customers' => (clone $customers)->whereYear('created_at', $year)->whereMonth('created_at', $month)->count(),
-                'renewed_customers' => DB::table('subscription_renewals')->whereYear('renewed_on', $year)->whereMonth('renewed_on', $month)->distinct('customer_id')->count('customer_id'),
-                'breakfast' => (clone $todayDeliveries)->where('meal_type', 'breakfast')->count(),
-                'lunch' => (clone $todayDeliveries)->where('meal_type', 'lunch')->count(),
-                'dinner' => (clone $todayDeliveries)->where('meal_type', 'dinner')->count(),
-                'deliveries_today' => (clone $todayDeliveries)->count(),
-                'pending_deliveries' => (clone $todayDeliveries)->where('status', 'pending')->count(),
-                'today_revenue' => (clone $payments)->whereDate('payment_date', $date)->sum('amount'),
-                'monthly_revenue' => $monthlyRevenue, 'monthly_expenses' => $monthlyExpense,
-                'monthly_profit' => $monthlyRevenue - $monthlyExpense, 'outstanding' => $outstanding,
+                'active_customers' => $activeCustomers,
+                'deliveries_today' => $deliveryTotal,
+                'monthly_revenue' => $monthlyRevenue,
+                'monthly_expenses' => $monthlyExpense,
+                'monthly_profit' => $profit,
+                'outstanding' => $outstanding,
+                'pending_payment_count' => $outstandingSubscriptions->count(),
             ],
-            'expiring' => Subscription::with('customer')->where('status', 'active')->whereBetween('end_date', [$date, $date->copy()->addDays(7)])->orderBy('end_date')->limit(8)->get(),
-            'topExpenseCategory' => $categoryExpenses->first(),
-            'popularPlan' => $plans->sortByDesc('total')->first(),
-            'analytics' => [
-                'best_revenue_month' => $monthly->sortByDesc('revenue')->first()['label'],
-                'highest_expense_month' => $monthly->sortByDesc('expense')->first()['label'],
-                'most_profitable_month' => $monthly->sortByDesc('profit')->first()['label'],
-                'least_profitable_month' => $monthly->sortBy('profit')->first()['label'],
-                'revenue_growth' => $growth((float) $currentMonth['revenue'], (float) $previousMonth['revenue']),
-                'expense_growth' => $growth((float) $currentMonth['expense'], (float) $previousMonth['expense']),
+            'deliveryStats' => $deliveryStats,
+            'finance' => [
+                'today_collection' => (float) (clone $payments)->whereDate('payment_date', $date)->sum('amount'),
+                'monthly_revenue' => $monthlyRevenue, 'monthly_expense' => $monthlyExpense, 'monthly_profit' => $profit,
+                'outstanding' => $outstanding, 'revenue_growth' => $growth($monthlyRevenue, $previousRevenue),
+                'expense_growth' => $growth($monthlyExpense, $previousExpense), 'state' => $profit > 0 ? 'profit' : ($profit < 0 ? 'loss' : 'neutral'),
             ],
-            'monthly' => $monthly, 'categoryExpenses' => $categoryExpenses, 'plans' => $plans,
+            'holiday' => ['is_holiday' => $isHoliday, 'title' => $currentHoliday?->title ?? ($date->isSunday() ? 'Weekly Sunday' : null), 'next_date' => $nextHolidayDate, 'next_title' => $nextHolidayTitle],
+            'alerts' => ['expiring_today' => $expiringToday->count(), 'expiring_week' => $expiring->count(), 'pending_payments' => $outstandingSubscriptions->count(), 'partial_payments' => (int) ($paymentStatusCounts['partial'] ?? 0), 'fully_paid' => (int) ($paymentStatusCounts['paid'] ?? 0), 'expired_unpaid' => $expiredUnpaidCount, 'expiring_unpaid' => $expiringUnpaidCount, 'meal_holds' => $mealHoldCount, 'new_customers' => (clone $customers)->whereYear('created_at', $year)->whereMonth('created_at', $month)->count()],
+            'expiringToday' => $expiringToday, 'expiring' => $expiring, 'pendingCustomers' => $pendingCustomers,
+            'topExpenseCategory' => $categoryExpenses->first(), 'monthly' => $monthly,
+            'categoryExpenses' => $categoryExpenses, 'plans' => $plans,
             'places' => Customer::whereNotNull('place')->distinct()->orderBy('place')->pluck('place'),
         ];
+    }
+
+    private function customerQuery(array $filters): Builder
+    {
+        return Customer::query()->when($filters['status'] ?? null, fn ($query, $status) => $query->where('status', $status))->when($filters['place'] ?? null, fn ($query, $place) => $query->where('place', $place));
+    }
+
+    private function subscriptionQuery(array $filters): Builder
+    {
+        return Subscription::query()->when($filters['payment_status'] ?? null, fn ($query, $status) => $query->where('payment_status', $status))
+            ->when($filters['status'] ?? null, fn ($query, $status) => $query->whereHas('customer', fn ($q) => $q->where('status', $status)))
+            ->when($filters['place'] ?? null, fn ($query, $place) => $query->whereHas('customer', fn ($q) => $q->where('place', $place)));
+    }
+
+    private function paymentQuery(array $filters): Builder
+    {
+        return Payment::query()->when($filters['payment_status'] ?? null, fn ($query, $status) => $query->whereHas('subscription', fn ($q) => $q->where('payment_status', $status)))
+            ->when($filters['status'] ?? null, fn ($query, $status) => $query->whereHas('customer', fn ($q) => $q->where('status', $status)))
+            ->when($filters['place'] ?? null, fn ($query, $place) => $query->whereHas('customer', fn ($q) => $q->where('place', $place)));
+    }
+
+    private function monthlySeries(Builder $payments, Builder $expenseQuery, int $year): \Illuminate\Support\Collection
+    {
+        $driver = DB::connection()->getDriverName();
+        $monthExpression = $driver === 'sqlite' ? "CAST(strftime('%m', payment_date) AS INTEGER)" : 'MONTH(payment_date)';
+        $expenseMonthExpression = $driver === 'sqlite' ? "CAST(strftime('%m', expense_date) AS INTEGER)" : 'MONTH(expense_date)';
+        $revenues = (clone $payments)->whereYear('payment_date', $year)->selectRaw("{$monthExpression} month, SUM(amount) total")->groupByRaw($monthExpression)->pluck('total', 'month');
+        $expenses = (clone $expenseQuery)->whereYear('expense_date', $year)->selectRaw("{$expenseMonthExpression} month, SUM(expenses.amount) total")->groupByRaw($expenseMonthExpression)->pluck('total', 'month');
+        return collect(range(1, 12))->map(function ($month) use ($year, $revenues, $expenses) {
+            $revenue = (float) ($revenues[$month] ?? 0); $expense = (float) ($expenses[$month] ?? 0);
+            return ['label' => Carbon::create($year, $month)->format('M'), 'revenue' => $revenue, 'expense' => $expense, 'profit' => $revenue - $expense];
+        });
     }
 }

@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 class Payment extends Model
 {
     use SoftDeletes;
-    protected $fillable = ['receipt_no', 'customer_id', 'subscription_id', 'payment_date', 'amount', 'method', 'notes', 'created_by'];
+    protected $fillable = ['receipt_no', 'transaction_token', 'customer_id', 'subscription_id', 'payment_date', 'amount', 'method', 'payment_type', 'notes', 'created_by'];
     protected function casts(): array { return ['payment_date' => 'date', 'amount' => 'decimal:2']; }
     public function customer(): BelongsTo { return $this->belongsTo(Customer::class); }
     public function subscription(): BelongsTo { return $this->belongsTo(Subscription::class); }

@@ -22,7 +22,7 @@ class ReportController extends Controller
 {
     public function index(Request $request, string $type = 'customers'): mixed
     {
-        abort_unless(in_array($type, ['customers', 'deliveries', 'expenses', 'revenue', 'profit', 'holidays', 'meal-holds', 'compensations', 'extensions', 'meal-not-required'], true), 404);
+        abort_unless(in_array($type, ['customers', 'deliveries', 'expenses', 'revenue', 'profit', 'payments', 'holidays', 'meal-holds', 'compensations', 'extensions', 'meal-not-required'], true), 404);
         [$rows, $columns, $summary] = $this->build($type, $request);
         if ($request->format === 'excel') return Excel::download(new ReportCollectionExport($rows, $columns), "{$type}-report.xlsx");
         if ($request->format === 'pdf' && class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
@@ -54,6 +54,24 @@ class ReportController extends Controller
         if ($type === 'revenue') {
             $rows = Payment::with('customer')->whereBetween('payment_date', [$from, $to])->get()->map(fn ($r) => ['Date' => $r->payment_date->format('d-m-Y'), 'Receipt' => $r->receipt_no, 'Customer' => $r->customer->name, 'Method' => strtoupper($r->method), 'Amount' => (float) $r->amount]);
             return [$rows, ['Date','Receipt','Customer','Method','Amount'], ['Total revenue' => $rows->sum('Amount')]];
+        }
+        if ($type === 'payments') {
+            $alertDays = (int) \App\Models\Setting::value('expiry_alert_days', 7);
+            $query = Subscription::with('customer')->withSum('payments', 'amount')->withCount('payments')->withMax('payments', 'payment_date')
+                ->when($request->customer, fn ($q, $v) => $q->where('customer_id', $v))
+                ->when($request->place, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)))
+                ->when($request->payment_status, fn ($q, $v) => $q->where('payment_status', $v))
+                ->when($request->package_type, fn ($q, $v) => $q->where('package_type', $v))
+                ->when($request->from, fn ($q, $v) => $q->whereDate('end_date', '>=', $v))
+                ->when($request->to, fn ($q, $v) => $q->whereDate('end_date', '<=', $v))
+                ->when($request->month, fn ($q, $v) => $q->whereMonth('end_date', $v))
+                ->when($request->year, fn ($q, $v) => $q->whereYear('end_date', $v))
+                ->when(in_array($request->payment_state, ['expired', 'overdue'], true), fn ($q) => $q->whereDate('end_date', '<', today())->whereIn('payment_status', ['pending', 'partial']))
+                ->when($request->payment_state === 'expiring', fn ($q) => $q->whereBetween('end_date', [today(), today()->addDays($alertDays)])->whereIn('payment_status', ['pending', 'partial']));
+            $service = app(\App\Services\PaymentService::class);
+            $summaries = $query->get()->map(fn ($subscription) => $service->summary($subscription));
+            $rows = $summaries->map(fn ($r) => ['Customer' => $r['customer'], 'Package' => $r['package_type'], 'Package Amount' => $r['package_amount'], 'Paid Amount' => $r['paid_amount'], 'Balance Amount' => $r['balance_amount'], 'Payment Status' => ucfirst($r['payment_status']), 'Last Payment' => $r['last_payment_date'] ?: '—', 'Transactions' => $r['transactions'], 'Expired Days' => $r['expired_days']]);
+            return [$rows, ['Customer','Package','Package Amount','Paid Amount','Balance Amount','Payment Status','Last Payment','Transactions','Expired Days'], ['Subscriptions' => $rows->count(), 'Paid amount' => $summaries->sum('paid_amount'), 'Balance amount' => $summaries->sum('balance_amount')]];
         }
         if ($type === 'holidays') {
             $explicit = Holiday::whereBetween('holiday_date', [$from, $to])->get()->keyBy(fn ($holiday) => $holiday->holiday_date->toDateString());

@@ -9,6 +9,6 @@ class PaymentRequest extends FormRequest
     public function authorize(): bool { return true; }
     public function rules(): array
     {
-        return ['subscription_id' => ['required', 'exists:subscriptions,id'], 'payment_date' => ['required', 'date'], 'amount' => ['required', 'numeric', 'gt:0'], 'method' => ['required', 'in:cash,bank,upi,card,other'], 'notes' => ['nullable', 'string', 'max:2000']];
+        return ['transaction_token' => ['required', 'uuid'], 'subscription_id' => ['required', 'exists:subscriptions,id'], 'payment_date' => ['required', 'date'], 'amount' => ['required', 'numeric', 'gt:0'], 'method' => ['required', 'in:cash,bank,upi,card,other'], 'payment_type' => ['required', 'in:full,partial'], 'confirm_overpayment' => ['nullable', 'boolean'], 'notes' => ['nullable', 'string', 'max:2000']];
     }
 }

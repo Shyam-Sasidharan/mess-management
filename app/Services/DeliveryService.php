@@ -13,7 +13,10 @@ class DeliveryService
 
     public function generateForDate(CarbonInterface $date): int
     {
-        if ($this->dates->isHoliday($date)) return 0;
+        if ($this->dates->isHoliday($date)) {
+            Delivery::whereDate('delivery_date', $date)->where('status', 'pending')->delete();
+            return 0;
+        }
         $count = 0;
         $deliveryDate = Carbon::parse($date->toDateString())->startOfDay();
         Subscription::with('customer')->where('status', 'active')
