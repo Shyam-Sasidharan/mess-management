@@ -32,7 +32,14 @@ class SubscriptionService
     {
         return DB::transaction(function () use ($customer, $data, $userId) {
             $previous = $customer->subscriptions()->latest('id')->first();
-            if ($previous && Carbon::parse($data['start_date'])->lte($previous->end_date)) throw ValidationException::withMessages(['start_date' => 'Renewal must start after the previous final extended end date of '.$previous->end_date->format('d-m-Y').'.']);
+            $cycleDays = (int) Setting::value('default_subscription_days', 30);
+            if ((int) ($data['subscription_days'] ?? $cycleDays) !== $cycleDays) throw ValidationException::withMessages(['subscription_days' => "Each renewal must be exactly one {$cycleDays}-service-day subscription cycle."]);
+            $data['subscription_days'] = $cycleDays;
+            if ($previous) {
+                $expectedStart = $previous->end_date->copy()->addDay();
+                if (! Carbon::parse($data['start_date'])->isSameDay($expectedStart)) throw ValidationException::withMessages(['start_date' => 'Renewal must start on '.$expectedStart->format('d-m-Y').', exactly one day after the previous final extended end date.']);
+                $data['start_date'] = $expectedStart;
+            }
             $subscription = $this->create($customer, $data, $userId);
             SubscriptionRenewal::create([
                 'customer_id' => $customer->id,

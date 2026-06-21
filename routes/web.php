@@ -40,6 +40,9 @@ Route::middleware(['auth', 'permission'])->group(function () {
         Route::post('/customers/{customer}/renew', [CustomerController::class, 'storeRenewal'])->name('customers.renew.store');
         Route::patch('/customers/{customer}/pause', [CustomerController::class, 'pause'])->name('customers.pause');
         Route::patch('/customers/{customer}/resume', [CustomerController::class, 'resume'])->name('customers.resume');
+        Route::get('/payments/{payment}/receipt', [PaymentController::class, 'receipt'])->name('payments.receipt');
+        Route::get('/payments/{payment}/receipt/print', [PaymentController::class, 'printReceipt'])->name('payments.receipt.print');
+        Route::get('/payments/{payment}/receipt/pdf', [PaymentController::class, 'receiptPdf'])->name('payments.receipt.pdf');
         Route::resource('payments', PaymentController::class)->only(['index', 'store']);
         Route::resource('expenses', ExpenseController::class)->except(['show']);
         Route::get('/expenses/{expense}/bill', [ExpenseController::class, 'bill'])->name('expenses.bill');

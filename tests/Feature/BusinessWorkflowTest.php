@@ -75,6 +75,38 @@ class BusinessWorkflowTest extends TestCase
         $this->assertSame(3700.0, app(\App\Services\DashboardService::class)->data([])['finance']['today_collection']);
     }
 
+    public function test_customer_full_payment_allocates_total_payable_subscription_by_subscription(): void
+    {
+        Carbon::setTestNow('2026-07-06 10:00:00');
+        $customer = $this->customer();
+        $old = app(SubscriptionService::class)->create($customer, [
+            'start_date' => '2026-06-01', 'subscription_days' => 30,
+            'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 2700,
+        ]);
+        $service = app(PaymentService::class);
+        $service->create($this->paymentData($old, 1440));
+        $renewal = app(SubscriptionService::class)->renew($customer, [
+            'start_date' => $old->end_date->copy()->addDay(), 'subscription_days' => 30,
+            'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 2700,
+        ]);
+        app(DeliveryService::class)->generateForDate(today());
+        $renewal->deliveries()->update(['status' => 'delivered', 'delivered_at' => now()]);
+
+        $data = $this->paymentData($renewal, 3960, 'full');
+        $created = $service->createCustomerFullPayment($data);
+
+        $this->assertCount(2, $created);
+        $this->assertSame([1440.0, 1260.0], $old->payments()->orderBy('id')->pluck('amount')->map(fn ($amount) => (float) $amount)->all());
+        $this->assertSame([2700.0], $renewal->payments()->pluck('amount')->map(fn ($amount) => (float) $amount)->all());
+        $this->assertSame('paid', $old->refresh()->payment_status);
+        $this->assertSame('paid', $renewal->refresh()->payment_status);
+        $service->createCustomerFullPayment($data);
+        $this->assertDatabaseCount('payments', 3);
+
+        $this->actingAs(User::where('email', 'admin@goldenmess.test')->firstOrFail());
+        $this->get(route('payments.index', ['show_paid' => 1]))->assertOk()->assertSee('id="paymentFull" checked', false);
+    }
+
     public function test_multiple_partial_payments_and_final_balance_remain_separate_transactions(): void
     {
         $subscription = $this->threeMealSubscription(); $service = app(PaymentService::class);
@@ -86,6 +118,33 @@ class BusinessWorkflowTest extends TestCase
         $this->assertSame('paid', $subscription->refresh()->payment_status);
         $this->assertDatabaseCount('payments', 3);
         $this->assertSame([1000.0, 1500.0, 1200.0], $subscription->payments()->orderBy('id')->pluck('amount')->map(fn ($amount) => (float) $amount)->all());
+    }
+
+    public function test_every_payment_has_printable_and_downloadable_receipt(): void
+    {
+        Carbon::setTestNow('2026-06-22 10:00:00');
+        $subscription = $this->subscription(2700);
+        $service = app(PaymentService::class);
+        $first = $service->create($this->paymentData($subscription, 1000));
+        $second = $service->create($this->paymentData($subscription, 1700, 'full'));
+
+        $this->assertMatchesRegularExpression('/^RECP-2026-\d{6}$/', $first->receipt_no);
+        $this->assertNotSame($first->receipt_no, $second->receipt_no);
+        $this->actingAs(User::where('email', 'admin@goldenmess.test')->firstOrFail());
+        $this->get(route('payments.receipt', $second))->assertOk()
+            ->assertSee('Payment Receipt')->assertSee($second->receipt_no)->assertSee('Previous Paid Amount')->assertSee('1,000.00')->assertSee('1,700.00');
+        $this->get(route('payments.receipt.print', $second))->assertOk()->assertSee('window.print()', false);
+        $this->get(route('payments.receipt.pdf', $second))->assertOk()->assertHeader('content-type', 'application/pdf');
+        $this->get(route('payments.index'))->assertOk()->assertSee('View Receipt')->assertSee('Print Receipt')->assertSee('Download PDF');
+    }
+
+    public function test_recording_payment_returns_a_print_receipt_action(): void
+    {
+        $subscription = $this->subscription(2700);
+        $this->actingAs(User::where('email', 'admin@goldenmess.test')->firstOrFail());
+        $response = $this->post(route('payments.store'), $this->paymentData($subscription, 2700, 'full'));
+        $response->assertRedirect()->assertSessionHas('success')->assertSessionHas('receipt_ids');
+        $this->get(route('payments.index'))->assertOk()->assertSee('Payment saved successfully')->assertSee('Print Receipt');
     }
 
     public function test_expired_unpaid_summary_shows_full_settings_package_and_expired_days(): void
@@ -107,6 +166,8 @@ class BusinessWorkflowTest extends TestCase
         app(PaymentService::class)->create($this->paymentData($subscription, 3700, 'full'));
         $this->assertFalse(app(PaymentService::class)->eligibleSubscriptions()->contains('id', $subscription->id));
         $this->assertTrue(app(PaymentService::class)->eligibleSubscriptions(true)->contains('id', $subscription->id));
+        $this->actingAs(User::where('email', 'admin@goldenmess.test')->firstOrFail());
+        $this->get(route('payments.index', ['show_paid' => 1]))->assertOk()->assertSee('Paid subscription accounts')->assertSee($subscription->subscription_no);
     }
 
     public function test_duplicate_submission_token_creates_one_transaction_and_confirmed_overpayment_is_tracked(): void
@@ -134,7 +195,7 @@ class BusinessWorkflowTest extends TestCase
         $this->assertDatabaseMissing('deliveries', ['subscription_id' => $old->id, 'delivery_date' => today()]);
 
         $renewal = app(SubscriptionService::class)->renew($customer, [
-            'start_date' => today(), 'subscription_days' => 30,
+            'start_date' => $old->end_date->copy()->addDay(), 'subscription_days' => 30,
             'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 2700,
         ]);
         $this->assertSame(2, app(DeliveryService::class)->generateForDate(today()));
@@ -154,10 +215,16 @@ class BusinessWorkflowTest extends TestCase
         $payments = app(PaymentService::class);
         $payments->create($this->paymentData($old, 1440));
         $renewal = app(SubscriptionService::class)->renew($customer, [
-            'start_date' => today(), 'subscription_days' => 30,
+            'start_date' => $old->end_date->copy()->addDay(), 'subscription_days' => 30,
             'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 2700,
         ]);
 
+        $beforeDelivery = $payments->customerDueBreakdown($customer);
+        $this->assertNull(collect($beforeDelivery['rows'])->firstWhere('id', $renewal->id));
+        $this->assertSame(1260.0, $beforeDelivery['total_payable']);
+
+        app(DeliveryService::class)->generateForDate(today());
+        $renewal->deliveries()->update(['status' => 'delivered', 'delivered_at' => now()]);
         $breakdown = $payments->customerDueBreakdown($customer);
         $oldDue = collect($breakdown['rows'])->firstWhere('id', $old->id);
         $newDue = collect($breakdown['rows'])->firstWhere('id', $renewal->id);
@@ -168,6 +235,71 @@ class BusinessWorkflowTest extends TestCase
         $this->assertSame(3960.0, $breakdown['total_payable']);
         $this->assertSame($old->id, Payment::sole()->subscription_id);
         $this->assertDatabaseMissing('payments', ['subscription_id' => $renewal->id]);
+    }
+
+    public function test_payment_is_rejected_for_renewal_without_delivered_food(): void
+    {
+        Carbon::setTestNow('2026-07-06 10:00:00');
+        $customer = $this->customer();
+        $old = app(SubscriptionService::class)->create($customer, [
+            'start_date' => '2026-06-01', 'subscription_days' => 30,
+            'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 2700,
+        ]);
+        $renewal = app(SubscriptionService::class)->renew($customer, [
+            'start_date' => $old->end_date->copy()->addDay(), 'subscription_days' => 30,
+            'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 2700,
+        ]);
+
+        $this->assertFalse(app(PaymentService::class)->eligibleSubscriptions()->contains('id', $renewal->id));
+        $this->expectException(ValidationException::class);
+        app(PaymentService::class)->create($this->paymentData($renewal, 2700, 'full'));
+    }
+
+    public function test_demo_renewal_dates_and_payments_follow_the_real_business_rules(): void
+    {
+        Carbon::setTestNow('2026-06-21 10:00:00');
+        $this->seed(\Database\Seeders\DemoDataSeeder::class);
+        $customer = Customer::where('name', 'Meera Menon')->firstOrFail();
+        $old = $customer->subscriptions()->where('subscription_no', 'like', 'DSUB-%')->firstOrFail();
+        $renewals = $customer->subscriptions()->where('subscription_no', 'like', 'DREN-%')->orderBy('start_date')->get();
+        $firstRenewal = $renewals->first();
+        $secondRenewal = $renewals->last();
+
+        $this->assertCount(2, $renewals);
+        $this->assertSame('DREN-2605-02', $firstRenewal->subscription_no);
+        $this->assertSame('DREN-2606-02', $secondRenewal->subscription_no);
+        $this->assertSame($old->end_date->copy()->addDay()->toDateString(), $firstRenewal->start_date->toDateString());
+        $this->assertSame($firstRenewal->end_date->copy()->addDay()->toDateString(), $secondRenewal->start_date->toDateString());
+        $this->assertSame([30, 30], $renewals->pluck('subscription_days')->all());
+        $this->assertSame(0, $renewals->sum(fn ($renewal) => $renewal->payments()->count()));
+        $this->assertTrue($renewals->every(fn ($renewal) => $renewal->deliveries()->where('status', 'delivered')->exists()));
+
+        $breakdown = app(PaymentService::class)->customerDueBreakdown($customer);
+        $oldDue = collect($breakdown['rows'])->firstWhere('id', $old->id);
+        $firstRenewalDue = collect($breakdown['rows'])->firstWhere('id', $firstRenewal->id);
+        $secondRenewalDue = collect($breakdown['rows'])->firstWhere('id', $secondRenewal->id);
+        $this->assertSame(1440.0, $oldDue['paid_amount']);
+        $this->assertSame(1260.0, $oldDue['balance_amount']);
+        $this->assertSame(0.0, $firstRenewalDue['paid_amount']);
+        $this->assertSame(2700.0, $firstRenewalDue['balance_amount']);
+        $this->assertSame(0.0, $secondRenewalDue['paid_amount']);
+        $this->assertSame(2700.0, $secondRenewalDue['balance_amount']);
+        $this->assertSame(6660.0, $breakdown['total_payable']);
+    }
+
+    public function test_renewal_cannot_cover_more_than_one_configured_cycle(): void
+    {
+        $customer = $this->customer();
+        $old = app(SubscriptionService::class)->create($customer, [
+            'start_date' => '2026-06-01', 'subscription_days' => 30,
+            'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 2700,
+        ]);
+
+        $this->expectException(ValidationException::class);
+        app(SubscriptionService::class)->renew($customer, [
+            'start_date' => $old->end_date->copy()->addDay(), 'subscription_days' => 60,
+            'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 2700,
+        ]);
     }
 
     public function test_renewal_cannot_overlap_the_previous_final_end_date(): void

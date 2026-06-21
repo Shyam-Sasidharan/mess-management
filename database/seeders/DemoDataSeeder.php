@@ -60,12 +60,15 @@ class DemoDataSeeder extends Seeder
                 }
             }
 
-            $this->seedRenewals($customers->take(3), $admin, $months[1]);
             $this->seedMealHolds($admin);
+            $dates = app(\App\Services\SubscriptionDateService::class);
+            Subscription::where('subscription_no', 'like', 'DSUB-%')->each(fn ($subscription) => $dates->recalculate($subscription));
+            $this->seedRenewals($customers->take(3), $admin);
             $this->seedExpenses($admin, $months);
             $this->seedNotifications($admin, $customers);
-            $dates = app(\App\Services\SubscriptionDateService::class);
-            Subscription::where(fn ($query) => $query->where('subscription_no', 'like', 'DSUB-%')->orWhere('subscription_no', 'like', 'DREN-%'))->each(fn ($subscription) => $dates->recalculate($subscription));
+            Subscription::where('subscription_no', 'like', 'DREN-%')->each(fn ($subscription) => $dates->recalculate($subscription));
+            $payments = app(\App\Services\PaymentService::class);
+            Subscription::where(fn ($query) => $query->where('subscription_no', 'like', 'DSUB-%')->orWhere('subscription_no', 'like', 'DREN-%'))->each(fn ($subscription) => $payments->syncStatus($subscription));
         });
     }
 
@@ -109,7 +112,7 @@ class DemoDataSeeder extends Seeder
         $days = $month->isSameMonth(now()->subMonthNoOverflow()) && $customer->status !== 'expired' ? 60 : 30;
         $start = $month->copy()->addDays(min($position, 12));
         $status = $customer->status === 'paused' ? 'paused' : ($customer->status === 'active' ? 'active' : 'expired');
-        $amount = [1 => 1800, 2 => 3200, 3 => 4500][$mealCount];
+        $amount = [1 => 1700, 2 => 2700, 3 => 3700][$mealCount];
 
         return Subscription::withTrashed()->updateOrCreate(['subscription_no' => 'DSUB-'.$month->format('ym').'-'.str_pad((string) $position, 2, '0', STR_PAD_LEFT)], [
             'customer_id' => $customer->id,
@@ -135,7 +138,7 @@ class DemoDataSeeder extends Seeder
             Payment::where('receipt_no', $receipt)->forceDelete();
             return;
         }
-        $amount = $subscription->payment_status === 'paid' ? (float) $subscription->amount : round((float) $subscription->amount * 0.45, 2);
+        $amount = $subscription->payment_status === 'paid' ? (float) $subscription->amount : [1 => 900, 2 => 1440, 3 => 1800][$subscription->meal_count];
         Payment::withTrashed()->updateOrCreate(['receipt_no' => $receipt], [
             'customer_id' => $subscription->customer_id,
             'subscription_id' => $subscription->id,
@@ -172,25 +175,30 @@ class DemoDataSeeder extends Seeder
         }
     }
 
-    private function seedRenewals($customers, User $admin, Carbon $renewalMonth): void
+    private function seedRenewals($customers, User $admin): void
     {
+        $dates = app(\App\Services\SubscriptionDateService::class);
         foreach ($customers as $index => $customer) {
             $previous = $customer->subscriptions()->where('subscription_no', 'like', 'DSUB-%')->oldest('id')->firstOrFail();
-            $start = $renewalMonth->copy()->addDays(2 + $index);
-            $new = Subscription::withTrashed()->updateOrCreate(['subscription_no' => 'DREN-'.$renewalMonth->format('ym').'-'.str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT)], [
-                'customer_id' => $customer->id, 'start_date' => $start, 'end_date' => $start->copy()->addDays(59),
-                'subscription_days' => 60, 'breakfast' => true, 'lunch' => true, 'dinner' => $index === 2,
-                'meal_count' => $index === 2 ? 3 : 2, 'package_type' => $index === 2 ? 'three_time' : 'two_time',
-                'amount' => $index === 2 ? 4500 : 3200, 'payment_status' => $index === 0 ? 'paid' : 'partial',
-                'status' => 'active', 'created_by' => $admin->id, 'deleted_at' => null,
-            ]);
-            SubscriptionRenewal::updateOrCreate(['new_subscription_id' => $new->id], [
-                'customer_id' => $customer->id, 'previous_subscription_id' => $previous->id,
-                'renewed_on' => $start, 'notes' => '[DEMO-DATA] Sample renewal.', 'created_by' => $admin->id,
-            ]);
+            foreach (range(1, 2) as $cycle) {
+                $start = $previous->end_date->copy()->addDay();
+                $new = Subscription::withTrashed()->updateOrCreate(['subscription_no' => 'DREN-'.$start->format('ym').'-'.str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT)], [
+                    'customer_id' => $customer->id, 'start_date' => $start, 'end_date' => $start->copy()->addDays(29),
+                    'subscription_days' => 30, 'breakfast' => true, 'lunch' => true, 'dinner' => $index === 2,
+                    'meal_count' => $index === 2 ? 3 : 2, 'package_type' => $index === 2 ? 'three_time' : 'two_time',
+                    'amount' => $index === 2 ? 3700 : 2700, 'payment_status' => 'pending',
+                    'status' => 'active', 'created_by' => $admin->id, 'deleted_at' => null,
+                ]);
+                SubscriptionRenewal::updateOrCreate(['new_subscription_id' => $new->id], [
+                    'customer_id' => $customer->id, 'previous_subscription_id' => $previous->id,
+                    'renewed_on' => $start, 'notes' => '[DEMO-DATA] Sample renewal cycle '.$cycle.'.', 'created_by' => $admin->id,
+                ]);
+                $new = $dates->recalculate($new);
+                $this->seedPayment($new, $admin, $index + 1, $start->copy()->startOfMonth());
+                $this->seedDeliveries($new, $admin, $index + 1);
+                $previous = $new;
+            }
             $customer->update(['status' => 'active']);
-            $this->seedPayment($new, $admin, $index + 1, $renewalMonth);
-            $this->seedDeliveries($new, $admin, $index + 1);
         }
     }
 

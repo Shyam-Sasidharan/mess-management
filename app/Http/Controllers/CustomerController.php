@@ -35,14 +35,15 @@ class CustomerController extends Controller
         return redirect()->route('customers.show', $customer)->with('success', 'Customer and subscription created.');
     }
 
-    public function show(Customer $customer, \App\Services\SubscriptionDateService $dates): View
+    public function show(Customer $customer, \App\Services\SubscriptionDateService $dates, \App\Services\PaymentService $payments): View
     {
         $customer->load(['subscriptions.payments', 'subscriptions.compensations', 'payments', 'mealHolds']);
         $recentDeliveryDays = $customer->deliveries()->latest('delivery_date')->latest('id')->limit(60)->get()
             ->groupBy(fn ($delivery) => $delivery->delivery_date->toDateString())->take(10);
         $currentSubscription = $customer->subscriptions->sortByDesc('id')->first();
         $subscriptionMetrics = $currentSubscription ? $dates->metrics($currentSubscription) : null;
-        return view('customers.show', compact('customer', 'currentSubscription', 'subscriptionMetrics', 'recentDeliveryDays'));
+        $subscriptionDueEligibility = $customer->subscriptions->mapWithKeys(fn ($subscription) => [$subscription->id => $payments->isDueEligible($subscription)]);
+        return view('customers.show', compact('customer', 'currentSubscription', 'subscriptionMetrics', 'recentDeliveryDays', 'subscriptionDueEligibility'));
     }
 
     public function edit(Customer $customer): View { return view('customers.edit', compact('customer')); }
@@ -62,7 +63,7 @@ class CustomerController extends Controller
     public function renew(Customer $customer, \App\Services\PaymentService $payments): View
     {
         $previous = $customer->subscriptions()->latest('id')->first();
-        $renewalStartDate = $previous ? $previous->end_date->copy()->addDay()->max(today())->toDateString() : today()->toDateString();
+        $renewalStartDate = $previous ? $previous->end_date->copy()->addDay()->toDateString() : today()->toDateString();
         $oldSubscriptionBalance = $payments->customerDueBreakdown($customer)['total_payable'];
         return view('customers.renew', ['customer' => $customer, 'previous' => $previous, 'defaults' => $this->subscriptionDefaults(), 'renewalStartDate' => $renewalStartDate, 'oldSubscriptionBalance' => $oldSubscriptionBalance]);
     }
