@@ -7,6 +7,8 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class User extends Authenticatable
 {
@@ -21,7 +23,10 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
+        'mobile',
         'password',
+        'role_id',
+        'is_active',
     ];
 
     /**
@@ -44,6 +49,15 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_active' => 'boolean',
         ];
+    }
+
+    public function role(): BelongsTo { return $this->belongsTo(Role::class); }
+    public function expenses(): HasMany { return $this->hasMany(Expense::class, 'created_by'); }
+    public function isAdmin(): bool { return $this->role?->slug === 'admin'; }
+    public function hasPermission(string $permission): bool
+    {
+        return $this->isAdmin() || in_array($permission, $this->role?->permissions ?? [], true);
     }
 }
