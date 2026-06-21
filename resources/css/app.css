@@ -20,4 +20,4 @@ body{font-size:.9rem;padding-bottom:72px}.main{min-height:calc(100vh - 72px)}.to
 
 @media print{.mobile-bottom-nav,.sidebar-backdrop,.mobile-filter-trigger,.mobile-filter-backdrop,.mobile-meal-tabs{display:none!important}}
 
-@media screen and (max-width:576px){.mobile-card-table tbody td{min-width:0;overflow:hidden}.mobile-card-table tbody td>*{grid-column:2;min-width:0;max-width:100%!important;overflow-wrap:anywhere}.mobile-card-table tbody td .text-truncate{width:100%;max-width:100%!important}.mobile-card-table tbody td[data-label="Contact"]{word-break:break-word}}
+@media screen and (max-width:576px){.mobile-card-table tbody tr{position:relative}.mobile-card-table tbody tr:has(.dropdown-menu.show){z-index:50}.mobile-card-table tbody td{min-width:0;overflow:visible}.mobile-card-table tbody td>*{grid-column:2;min-width:0;max-width:100%!important;overflow-wrap:anywhere}.mobile-card-table tbody td .text-truncate{width:100%;max-width:100%!important}.mobile-card-table tbody td[data-label="Contact"]{word-break:break-word}.mobile-card-table tbody td[data-label="Contact"]>*{overflow:hidden}.mobile-card-table .dropdown-menu.show{z-index:1100}}
