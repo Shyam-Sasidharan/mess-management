@@ -12,6 +12,8 @@ use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SearchController;
 use App\Http\Controllers\SettingController;
+use App\Http\Controllers\HolidayController;
+use App\Http\Controllers\MealHoldController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('guest')->group(function () {
@@ -45,6 +47,8 @@ Route::middleware(['auth', 'permission'])->group(function () {
         Route::get('/reports/{type?}', [ReportController::class, 'index'])->name('reports.index');
         Route::get('/settings', [SettingController::class, 'index'])->name('settings.index');
         Route::put('/settings', [SettingController::class, 'update'])->name('settings.update');
+        Route::resource('holidays', HolidayController::class)->only(['index', 'store', 'update', 'destroy']);
+        Route::resource('meal-holds', MealHoldController::class)->only(['index', 'store', 'update', 'destroy']);
     });
 
     Route::middleware('permission:manage-deliveries')->group(function () {

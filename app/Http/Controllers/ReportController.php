@@ -7,6 +7,10 @@ use App\Models\Customer;
 use App\Models\Delivery;
 use App\Models\Expense;
 use App\Models\Payment;
+use App\Models\Holiday;
+use App\Models\CustomerMealHold;
+use App\Models\SubscriptionCompensation;
+use App\Models\Subscription;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -18,13 +22,15 @@ class ReportController extends Controller
 {
     public function index(Request $request, string $type = 'customers'): mixed
     {
-        abort_unless(in_array($type, ['customers', 'deliveries', 'expenses', 'revenue', 'profit'], true), 404);
+        abort_unless(in_array($type, ['customers', 'deliveries', 'expenses', 'revenue', 'profit', 'holidays', 'meal-holds', 'compensations', 'extensions', 'meal-not-required'], true), 404);
         [$rows, $columns, $summary] = $this->build($type, $request);
         if ($request->format === 'excel') return Excel::download(new ReportCollectionExport($rows, $columns), "{$type}-report.xlsx");
         if ($request->format === 'pdf' && class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
             return \Barryvdh\DomPDF\Facade\Pdf::loadView('reports.print', compact('type', 'rows', 'columns', 'summary'))->download("{$type}-report.pdf");
         }
-        return view($request->format === 'print' ? 'reports.print' : 'reports.index', compact('type', 'rows', 'columns', 'summary'));
+        $customers = Customer::orderBy('name')->get(['id', 'name']);
+        $places = Customer::whereNotNull('place')->distinct()->orderBy('place')->pluck('place');
+        return view($request->format === 'print' ? 'reports.print' : 'reports.index', compact('type', 'rows', 'columns', 'summary', 'customers', 'places'));
     }
 
     private function build(string $type, Request $request): array
@@ -48,6 +54,35 @@ class ReportController extends Controller
         if ($type === 'revenue') {
             $rows = Payment::with('customer')->whereBetween('payment_date', [$from, $to])->get()->map(fn ($r) => ['Date' => $r->payment_date->format('d-m-Y'), 'Receipt' => $r->receipt_no, 'Customer' => $r->customer->name, 'Method' => strtoupper($r->method), 'Amount' => (float) $r->amount]);
             return [$rows, ['Date','Receipt','Customer','Method','Amount'], ['Total revenue' => $rows->sum('Amount')]];
+        }
+        if ($type === 'holidays') {
+            $explicit = Holiday::whereBetween('holiday_date', [$from, $to])->get()->keyBy(fn ($holiday) => $holiday->holiday_date->toDateString());
+            $rows = collect();
+            for ($date = Carbon::parse($from); $date <= Carbon::parse($to); $date->addDay()) {
+                $holiday = $explicit->get($date->toDateString());
+                if ($holiday || $date->isSunday()) $rows->push(['Date' => $date->format('d-m-Y'), 'Holiday' => $holiday?->title ?? 'Default Sunday', 'Type' => str($holiday?->type ?? 'weekly_holiday')->replace('_', ' ')->title(), 'Reason' => $holiday?->reason, 'Status' => ucfirst($holiday?->status ?? 'active')]);
+            }
+            return [$rows, ['Date','Holiday','Type','Reason','Status'], ['Holiday days' => $rows->where('Status', 'Active')->count()]];
+        }
+        if ($type === 'meal-holds') {
+            $query = CustomerMealHold::with(['customer', 'subscription'])->whereBetween('hold_date', [$from, $to])->when($request->customer, fn ($q, $v) => $q->where('customer_id', $v))->when($request->place, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)));
+            $rows = $query->get()->map(fn ($r) => ['Date' => $r->hold_date->format('d-m-Y'), 'Customer' => $r->customer->name, 'Area' => $r->customer->place, 'Type' => $r->is_full_day_hold ? 'Full Day Hold' : 'Partial Meal Hold', 'Breakfast' => $r->subscription->breakfast ? ($r->breakfast_required ? 'Required' : 'Not Required') : 'Not Subscribed', 'Lunch' => $r->subscription->lunch ? ($r->lunch_required ? 'Required' : 'Not Required') : 'Not Subscribed', 'Dinner' => $r->subscription->dinner ? ($r->dinner_required ? 'Required' : 'Not Required') : 'Not Subscribed', 'Reason' => $r->reason]);
+            return [$rows, ['Date','Customer','Area','Type','Breakfast','Lunch','Dinner','Reason'], ['Holds' => $rows->count(), 'Full-day holds' => $rows->where('Type', 'Full Day Hold')->count()]];
+        }
+        if ($type === 'compensations') {
+            $query = SubscriptionCompensation::with(['customer', 'subscription'])->whereBetween('compensation_date', [$from, $to])->when($request->customer, fn ($q, $v) => $q->where('customer_id', $v))->when($request->compensation_type, fn ($q, $v) => $q->where('compensation_type', $v))->when($request->place, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)));
+            $rows = $query->get()->map(fn ($r) => ['Date' => $r->compensation_date->format('d-m-Y'), 'Customer' => $r->customer->name, 'Area' => $r->customer->place, 'Subscription' => $r->subscription->subscription_no, 'Type' => str($r->compensation_type)->replace('_', ' ')->title(), 'Reason' => $r->reason, 'Days Added' => $r->days_added]);
+            return [$rows, ['Date','Customer','Area','Subscription','Type','Reason','Days Added'], ['Compensation days' => $rows->sum('Days Added')]];
+        }
+        if ($type === 'extensions') {
+            $query = Subscription::with('customer')->whereDate('start_date', '<=', $to)->whereDate('end_date', '>=', $from)->where(fn ($q) => $q->where('holiday_compensation_days', '>', 0)->orWhere('meal_hold_compensation_days', '>', 0))->when($request->customer, fn ($q, $v) => $q->where('customer_id', $v))->when($request->place, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)));
+            $rows = $query->get()->map(fn ($r) => ['Customer' => $r->customer->name, 'Area' => $r->customer->place, 'Subscription' => $r->subscription_no, 'Start Date' => $r->start_date->format('d-m-Y'), 'Original End' => ($r->original_end_date ?? $r->end_date)->format('d-m-Y'), 'Holiday Days' => $r->holiday_compensation_days, 'Meal Hold Days' => $r->meal_hold_compensation_days, 'Extended End' => $r->end_date->format('d-m-Y'), 'Total Extension' => $r->holiday_compensation_days + $r->meal_hold_compensation_days]);
+            return [$rows, ['Customer','Area','Subscription','Start Date','Original End','Holiday Days','Meal Hold Days','Extended End','Total Extension'], ['Subscriptions extended' => $rows->count(), 'Days added' => $rows->sum('Total Extension')]];
+        }
+        if ($type === 'meal-not-required') {
+            $holds = CustomerMealHold::with(['customer', 'subscription'])->whereBetween('hold_date', [$from, $to])->when($request->customer, fn ($q, $v) => $q->where('customer_id', $v))->when($request->place, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)))->get();
+            $rows = $holds->flatMap(function ($hold) use ($request) { return collect(['breakfast','lunch','dinner'])->filter(fn ($meal) => $hold->subscription->{$meal} && ! $hold->{$meal.'_required'} && (! $request->meal_type || $request->meal_type === $meal))->map(fn ($meal) => ['Date' => $hold->hold_date->format('d-m-Y'), 'Customer' => $hold->customer->name, 'Area' => $hold->customer->place, 'Meal' => ucfirst($meal), 'Full Day Hold' => $hold->is_full_day_hold ? 'Yes' : 'No', 'Reason' => $hold->reason]); });
+            return [$rows, ['Date','Customer','Area','Meal','Full Day Hold','Reason'], ['Meals not required' => $rows->count()]];
         }
         $months = collect(); $cursor = Carbon::parse($from)->startOfMonth(); $end = Carbon::parse($to)->endOfMonth();
         while ($cursor <= $end) {

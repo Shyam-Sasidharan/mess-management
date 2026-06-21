@@ -13,6 +13,8 @@ use Illuminate\Validation\ValidationException;
 
 class SubscriptionService
 {
+    public function __construct(private SubscriptionDateService $dates) {}
+
     public function create(Customer $customer, array $data, ?int $userId = null): Subscription
     {
         return DB::transaction(function () use ($customer, $data, $userId) {
@@ -22,7 +24,7 @@ class SubscriptionService
                 'created_by' => $userId,
             ]);
             $customer->update(['status' => 'active', 'paused_at' => null]);
-            return $subscription;
+            return $this->dates->recalculate($subscription);
         });
     }
 

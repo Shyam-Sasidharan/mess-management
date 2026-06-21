@@ -12,7 +12,8 @@ class Subscription extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'customer_id', 'subscription_no', 'start_date', 'end_date', 'subscription_days',
+        'customer_id', 'subscription_no', 'start_date', 'end_date', 'original_end_date', 'subscription_days',
+        'holiday_compensation_days', 'meal_hold_compensation_days',
         'breakfast', 'lunch', 'dinner', 'meal_count', 'package_type', 'amount',
         'payment_status', 'status', 'paused_at', 'resumed_at', 'created_by',
     ];
@@ -22,7 +23,7 @@ class Subscription extends Model
     protected function casts(): array
     {
         return [
-            'start_date' => 'date', 'end_date' => 'date', 'breakfast' => 'boolean',
+            'start_date' => 'date', 'end_date' => 'date', 'original_end_date' => 'date', 'breakfast' => 'boolean',
             'lunch' => 'boolean', 'dinner' => 'boolean', 'amount' => 'decimal:2',
             'paused_at' => 'datetime', 'resumed_at' => 'datetime',
         ];
@@ -31,6 +32,8 @@ class Subscription extends Model
     public function customer(): BelongsTo { return $this->belongsTo(Customer::class); }
     public function payments(): HasMany { return $this->hasMany(Payment::class); }
     public function deliveries(): HasMany { return $this->hasMany(Delivery::class); }
+    public function mealHolds(): HasMany { return $this->hasMany(CustomerMealHold::class); }
+    public function compensations(): HasMany { return $this->hasMany(SubscriptionCompensation::class); }
     public function creator(): BelongsTo { return $this->belongsTo(User::class, 'created_by'); }
 
     public function getPaidAmountAttribute(): float { return (float) $this->payments()->sum('amount'); }

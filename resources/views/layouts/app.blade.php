@@ -13,6 +13,7 @@
         @if(auth()->user()->hasPermission('manage-business'))
         <div class="nav-label">Business</div><a class="nav-link {{ request()->routeIs('customers.*')?'active':'' }}" href="{{ route('customers.index') }}"><i class="bi bi-people"></i> Customers</a>
         <a class="nav-link {{ request()->routeIs('payments.*')?'active':'' }}" href="{{ route('payments.index') }}"><i class="bi bi-wallet2"></i> Payments</a><a class="nav-link {{ request()->routeIs('expenses.*')?'active':'' }}" href="{{ route('expenses.index') }}"><i class="bi bi-receipt"></i> Expenses</a>
+        <a class="nav-link {{ request()->routeIs('holidays.*')?'active':'' }}" href="{{ route('holidays.index') }}"><i class="bi bi-calendar-event"></i> Holiday Calendar</a><a class="nav-link {{ request()->routeIs('meal-holds.*')?'active':'' }}" href="{{ route('meal-holds.index') }}"><i class="bi bi-pause-circle"></i> Meal Holds</a>
         @endif
         <a class="nav-link {{ request()->routeIs('deliveries.*')?'active':'' }}" href="{{ route('deliveries.index') }}"><i class="bi bi-truck"></i> Deliveries</a>
         @if(auth()->user()->hasPermission('manage-business'))
@@ -23,7 +24,7 @@
 <main class="main">
     <header class="topbar"><button class="btn btn-light mobile-menu me-2" data-sidebar-toggle><i class="bi bi-list"></i></button>
         <form action="{{ route('search') }}" class="d-none d-md-flex" style="max-width:420px;width:100%"><div class="input-group"><span class="input-group-text bg-transparent border-end-0"><i class="bi bi-search"></i></span><input name="q" class="form-control border-start-0" placeholder="Search customers, mobile, vendors…"></div></form>
-        <div class="ms-auto d-flex align-items-center gap-2"><a class="btn btn-light position-relative" href="{{ route('notifications.index') }}"><i class="bi bi-bell"></i>@if(auth()->user()->unreadNotifications()->count())<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">{{ auth()->user()->unreadNotifications()->count() }}</span>@endif</a>
+        <div class="ms-auto d-flex align-items-center gap-3"><a class="btn btn-light position-relative" href="{{ route('notifications.index') }}"><i class="bi bi-bell"></i>@if(auth()->user()->unreadNotifications()->count())<span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">{{ auth()->user()->unreadNotifications()->count() }}</span>@endif</a>
             <div class="dropdown"><button class="btn btn-light dropdown-toggle d-flex align-items-center gap-2" data-bs-toggle="dropdown"><span class="avatar">{{ strtoupper(substr(auth()->user()->name,0,1)) }}</span><span class="d-none d-sm-inline">{{ auth()->user()->name }}</span></button><div class="dropdown-menu dropdown-menu-end p-2"><div class="px-2 py-1 text-muted small">{{ auth()->user()->role?->name }}</div><form method="post" action="{{ route('logout') }}">@csrf<button class="dropdown-item text-danger"><i class="bi bi-box-arrow-right me-2"></i>Logout</button></form></div></div>
         </div></header>
     <div class="content slide-in">@yield('content')</div>

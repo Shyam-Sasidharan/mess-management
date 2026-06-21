@@ -29,6 +29,8 @@ class Customer extends Model
     public function currentSubscription(): HasOne { return $this->hasOne(Subscription::class)->latestOfMany(); }
     public function payments(): HasMany { return $this->hasMany(Payment::class); }
     public function deliveries(): HasMany { return $this->hasMany(Delivery::class); }
+    public function mealHolds(): HasMany { return $this->hasMany(CustomerMealHold::class); }
+    public function compensations(): HasMany { return $this->hasMany(SubscriptionCompensation::class); }
     public function creator(): BelongsTo { return $this->belongsTo(User::class, 'created_by'); }
 
     public function scopeSearch(Builder $query, ?string $term): Builder

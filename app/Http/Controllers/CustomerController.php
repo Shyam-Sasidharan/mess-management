@@ -35,10 +35,12 @@ class CustomerController extends Controller
         return redirect()->route('customers.show', $customer)->with('success', 'Customer and subscription created.');
     }
 
-    public function show(Customer $customer): View
+    public function show(Customer $customer, \App\Services\SubscriptionDateService $dates): View
     {
-        $customer->load(['subscriptions.payments', 'payments', 'deliveries' => fn ($q) => $q->latest('delivery_date')->limit(30)]);
-        return view('customers.show', compact('customer'));
+        $customer->load(['subscriptions.payments', 'subscriptions.compensations', 'payments', 'mealHolds', 'deliveries' => fn ($q) => $q->latest('delivery_date')->limit(30)]);
+        $currentSubscription = $customer->subscriptions->sortByDesc('id')->first();
+        $subscriptionMetrics = $currentSubscription ? $dates->metrics($currentSubscription) : null;
+        return view('customers.show', compact('customer', 'currentSubscription', 'subscriptionMetrics'));
     }
 
     public function edit(Customer $customer): View { return view('customers.edit', compact('customer')); }
