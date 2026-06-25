@@ -49,8 +49,8 @@ class BusinessWorkflowTest extends TestCase
         $this->assertSame('two_time', $subscription->package_type);
         $this->assertSame(2, $subscription->meal_count);
         $this->assertSame('2026-06-30', $subscription->original_end_date->toDateString());
-        $this->assertSame('2026-07-04', $subscription->end_date->toDateString());
-        $this->assertSame(4, $subscription->holiday_compensation_days);
+        $this->assertSame('2026-06-30', $subscription->end_date->toDateString());
+        $this->assertSame(0, $subscription->holiday_compensation_days);
         $this->assertSame('Breakfast, Lunch', $subscription->meal_names);
     }
 
@@ -192,7 +192,7 @@ class BusinessWorkflowTest extends TestCase
             'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 2700,
         ]);
 
-        $this->assertSame('2026-07-04', $old->end_date->toDateString());
+        $this->assertSame('2026-06-30', $old->end_date->toDateString());
         $this->assertSame(0, app(DeliveryService::class)->generateForDate(today()));
         $this->assertDatabaseMissing('deliveries', ['subscription_id' => $old->id, 'delivery_date' => today()]);
 
@@ -348,14 +348,27 @@ class BusinessWorkflowTest extends TestCase
         Holiday::create(['holiday_date' => '2026-06-02', 'title' => 'Emergency closure', 'type' => 'emergency', 'status' => 'active']);
         $dates = app(SubscriptionDateService::class);
         $subscription = $dates->recalculate($subscription);
-        $this->assertSame('2026-07-06', $subscription->end_date->toDateString());
+        $this->assertSame('2026-07-01', $subscription->end_date->toDateString());
 
         $hold = CustomerMealHold::create(['customer_id' => $subscription->customer_id, 'subscription_id' => $subscription->id, 'hold_date' => '2026-06-03', 'breakfast_required' => false, 'lunch_required' => false, 'dinner_required' => false, 'is_full_day_hold' => true]);
         $subscription = $dates->recalculate($subscription);
-        $this->assertSame('2026-07-07', $subscription->end_date->toDateString());
-        $this->assertSame(6, $subscription->holiday_compensation_days);
+        $this->assertSame('2026-07-02', $subscription->end_date->toDateString());
+        $this->assertSame(1, $subscription->holiday_compensation_days);
         $this->assertSame(1, $subscription->meal_hold_compensation_days);
         $this->assertDatabaseHas('subscription_compensations', ['subscription_id' => $subscription->id, 'compensation_date' => '2026-06-03 00:00:00', 'compensation_type' => 'meal_hold']);
+    }
+
+    public function test_non_compensation_holiday_blocks_delivery_without_extending_subscription(): void
+    {
+        $subscription = app(SubscriptionService::class)->create($this->customer(), ['start_date' => '2026-06-01', 'subscription_days' => 30, 'breakfast' => true, 'lunch' => true, 'dinner' => false, 'amount' => 1000]);
+        Holiday::create(['holiday_date' => '2026-06-02', 'title' => 'Cleaning day', 'type' => 'custom', 'compensation_type' => 'non_compensation', 'status' => 'active']);
+
+        $subscription = app(SubscriptionDateService::class)->recalculate($subscription);
+
+        $this->assertSame('2026-06-30', $subscription->end_date->toDateString());
+        $this->assertSame(0, $subscription->holiday_compensation_days);
+        $this->assertTrue(app(SubscriptionDateService::class)->isHoliday('2026-06-02'));
+        $this->assertDatabaseMissing('subscription_compensations', ['subscription_id' => $subscription->id, 'compensation_date' => '2026-06-02 00:00:00', 'compensation_type' => 'holiday']);
     }
 
     public function test_partial_hold_generates_only_the_required_meal_without_compensation(): void

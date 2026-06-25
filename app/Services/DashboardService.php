@@ -41,6 +41,9 @@ class DashboardService
 
         $monthlyRevenue = (float) (clone $payments)->whereYear('payment_date', $year)->whereMonth('payment_date', $month)->sum('amount');
         $monthlyExpense = (float) (clone $expenses)->whereYear('expense_date', $year)->whereMonth('expense_date', $month)->sum('amount');
+        $monthStart = Carbon::create($year, $month)->startOfMonth();
+        $monthEnd = $monthStart->copy()->endOfMonth();
+        $monthlyHolidayCounts = $this->holidayCompensationCounts($monthStart, $monthEnd);
         $previous = Carbon::create($year, $month)->subMonthNoOverflow();
         $previousRevenue = (float) (clone $payments)->whereYear('payment_date', $previous->year)->whereMonth('payment_date', $previous->month)->sum('amount');
         $previousExpense = (float) (clone $expenses)->whereYear('expense_date', $previous->year)->whereMonth('expense_date', $previous->month)->sum('amount');
@@ -87,6 +90,8 @@ class DashboardService
                 'monthly_profit' => $profit,
                 'outstanding' => $outstanding,
                 'pending_payment_count' => $outstandingSubscriptions->count(),
+                'compensation_holidays' => (int) ($monthlyHolidayCounts['compensation'] ?? 0),
+                'non_compensation_holidays' => (int) ($monthlyHolidayCounts['non_compensation'] ?? 0),
             ],
             'deliveryStats' => $deliveryStats,
             'finance' => [
@@ -134,5 +139,17 @@ class DashboardService
             $revenue = (float) ($revenues[$month] ?? 0); $expense = (float) ($expenses[$month] ?? 0);
             return ['label' => Carbon::create($year, $month)->format('M'), 'revenue' => $revenue, 'expense' => $expense, 'profit' => $revenue - $expense];
         });
+    }
+
+    private function holidayCompensationCounts(Carbon $start, Carbon $end): array
+    {
+        $explicit = Holiday::active()->whereBetween('holiday_date', [$start, $end])->get()->keyBy(fn ($holiday) => $holiday->holiday_date->toDateString());
+        $counts = ['compensation' => 0, 'non_compensation' => 0];
+        for ($date = $start->copy(); $date <= $end; $date->addDay()) {
+            $holiday = $explicit->get($date->toDateString());
+            if ($holiday) $counts[$holiday->compensation_type]++;
+            elseif ($date->isSunday()) $counts['non_compensation']++;
+        }
+        return $counts;
     }
 }

@@ -74,13 +74,23 @@ class ReportController extends Controller
             return [$rows, ['Customer','Package','Package Amount','Paid Amount','Balance Amount','Payment Status','Last Payment','Transactions','Expired Days'], ['Subscriptions' => $rows->count(), 'Paid amount' => $summaries->sum('paid_amount'), 'Balance amount' => $summaries->sum('balance_amount')]];
         }
         if ($type === 'holidays') {
-            $explicit = Holiday::whereBetween('holiday_date', [$from, $to])->get()->keyBy(fn ($holiday) => $holiday->holiday_date->toDateString());
+            $explicit = Holiday::whereBetween('holiday_date', [$from, $to])
+                ->when($request->holiday_type, fn ($q, $v) => $q->where('type', $v))
+                ->when($request->holiday_compensation_type, fn ($q, $v) => $q->where('compensation_type', $v))
+                ->get()->keyBy(fn ($holiday) => $holiday->holiday_date->toDateString());
             $rows = collect();
             for ($date = Carbon::parse($from); $date <= Carbon::parse($to); $date->addDay()) {
                 $holiday = $explicit->get($date->toDateString());
-                if ($holiday || $date->isSunday()) $rows->push(['Date' => $date->format('d-m-Y'), 'Holiday' => $holiday?->title ?? 'Default Sunday', 'Type' => str($holiday?->type ?? 'weekly_holiday')->replace('_', ' ')->title(), 'Reason' => $holiday?->reason, 'Status' => ucfirst($holiday?->status ?? 'active')]);
+                $includeVirtualSunday = ! $holiday && $date->isSunday()
+                    && (! $request->holiday_type || $request->holiday_type === 'weekly_holiday')
+                    && (! $request->holiday_compensation_type || $request->holiday_compensation_type === 'non_compensation');
+                if ($includeVirtualSunday) {
+                    $rows->push(['Date' => $date->format('d-m-Y'), 'Holiday' => 'Weekly Sunday', 'Holiday Type' => 'Weekly Off', 'Compensation Type' => 'Non-Compensation Holiday', 'Reason' => 'Automatic weekly off', 'Status' => 'Active']);
+                } elseif ($holiday) {
+                    $rows->push(['Date' => $date->format('d-m-Y'), 'Holiday' => $holiday->title, 'Holiday Type' => str($holiday->type)->replace('_', ' ')->title(), 'Compensation Type' => $holiday->compensation_type === 'compensation' ? 'Compensation Holiday' : 'Non-Compensation Holiday', 'Reason' => $holiday->reason, 'Status' => ucfirst($holiday->status)]);
+                }
             }
-            return [$rows, ['Date','Holiday','Type','Reason','Status'], ['Holiday days' => $rows->where('Status', 'Active')->count()]];
+            return [$rows, ['Date','Holiday','Holiday Type','Compensation Type','Reason','Status'], ['Holiday days' => $rows->where('Status', 'Active')->count(), 'Compensation holidays' => $rows->where('Compensation Type', 'Compensation Holiday')->where('Status', 'Active')->count(), 'Non-compensation holidays' => $rows->where('Compensation Type', 'Non-Compensation Holiday')->where('Status', 'Active')->count()]];
         }
         if ($type === 'meal-holds') {
             $query = CustomerMealHold::with(['customer', 'subscription'])->whereBetween('hold_date', [$from, $to])->when($request->customer, fn ($q, $v) => $q->where('customer_id', $v))->when($request->place, fn ($q, $v) => $q->whereHas('customer', fn ($q) => $q->where('place', $v)));

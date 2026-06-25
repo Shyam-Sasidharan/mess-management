@@ -38,8 +38,12 @@ class SubscriptionDateService
                 $key = $cursor->toDateString();
                 $holiday = $holidays->get($key);
                 $hold = $holds->get($key);
-                if ($cursor->isSunday() || $holiday) {
-                    $compensations[$key] = ['compensation_type' => 'holiday', 'reason' => $holiday?->title ?? 'Default Sunday holiday'];
+                if ($holiday) {
+                    if ($holiday->isCompensation()) {
+                        $compensations[$key] = ['compensation_type' => 'holiday', 'reason' => $holiday->title];
+                    } else {
+                        $usedServiceDays++;
+                    }
                 } elseif ($hold && $this->isFullDayHold($subscription, $hold)) {
                     $compensations[$key] = ['compensation_type' => 'meal_hold', 'reason' => $hold->reason ?: 'Full day meal hold'];
                 } else {

@@ -21,7 +21,9 @@
 ['monthly_revenue','Monthly revenue','graph-up-arrow','reports.index',['type'=>'revenue'],'money','green'],
 ['monthly_expenses','Monthly expense','receipt','expenses.index',['from'=>$filterDate->copy()->startOfMonth()->toDateString(),'to'=>$filterDate->copy()->endOfMonth()->toDateString()],'money','red'],
 ['monthly_profit','Monthly profit','piggy-bank','reports.index',['type'=>'profit'],'money',$cards['monthly_profit']>=0?'green':'red'],
-['outstanding','Pending amount','exclamation-circle','payments.index',[],'money','orange']]; @endphp
+['outstanding','Pending amount','exclamation-circle','payments.index',[],'money','orange'],
+['compensation_holidays','Comp. holidays','calendar-plus','reports.index',['type'=>'holidays','holiday_compensation_type'=>'compensation'],'count','green'],
+['non_compensation_holidays','Non-comp. holidays','calendar-x','reports.index',['type'=>'holidays','holiday_compensation_type'=>'non_compensation'],'count','red']]; @endphp
 @foreach($summaryCards as [$key,$label,$icon,$route,$params,$format,$tone])<div class="col-6 col-lg-4 col-xxl-2"><a href="{{ route($route,$params) }}" class="summary-card tone-{{ $tone }}"><div class="summary-icon"><i class="bi bi-{{ $icon }}"></i></div><div class="summary-label">{{ $label }}</div><div class="summary-value" data-kpi="{{ $key }}" data-format="{{ $format }}">{{ $format==='money'?$currency.number_format($cards[$key],2):number_format($cards[$key]) }}</div>@if($key==='outstanding')<div class="summary-note">{{ $cards['pending_payment_count'] }} customer(s)</div>@else<div class="summary-note"><i class="bi bi-arrow-right"></i> View details</div>@endif</a></div>@endforeach
 </div></section>
 
