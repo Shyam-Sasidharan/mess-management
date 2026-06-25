@@ -16,6 +16,8 @@ use App\Services\MealHoldService;
 use Carbon\Carbon;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
@@ -427,6 +429,26 @@ class BusinessWorkflowTest extends TestCase
         $this->assertDatabaseMissing('settings', ['key' => 'lunch_price']);
         $this->assertDatabaseMissing('settings', ['key' => 'dinner_price']);
         $this->assertSame('2700', (string) \App\Models\Setting::value('two_time_package_price'));
+    }
+
+    public function test_settings_logo_upload_is_saved_and_displayed(): void
+    {
+        Storage::fake('public');
+        $this->actingAs(User::where('email', 'admin@goldenmess.test')->firstOrFail());
+
+        $this->put(route('settings.update'), [
+            'business_name' => 'Golden Mess', 'business_mobile' => '9999999999', 'business_email' => '', 'business_address' => 'Main Road',
+            'one_time_package_price' => 1700, 'two_time_package_price' => 2700, 'three_time_package_price' => 3700,
+            'default_subscription_days' => 30, 'expiry_alert_days' => 7, 'currency' => '₹', 'timezone' => 'Asia/Kolkata', 'date_format' => 'd-m-Y',
+            'logo' => UploadedFile::fake()->image('mess-logo.png', 1536, 1024)->size(1200),
+        ])->assertRedirect()->assertSessionHasNoErrors();
+
+        $logo = \App\Models\Setting::value('business_logo');
+        $this->assertNotEmpty($logo);
+        $this->assertStringStartsWith('branding/', $logo);
+        Storage::disk('public')->assertExists($logo);
+
+        $this->get(route('settings.index'))->assertOk()->assertSee('Current logo')->assertSee($logo);
     }
 
     public function test_customer_profile_renders_grouped_delivery_days(): void

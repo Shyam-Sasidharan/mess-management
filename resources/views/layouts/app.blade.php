@@ -6,8 +6,15 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.6/dist/css/bootstrap.min.css" rel="stylesheet"><link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
     <link href="https://cdn.datatables.net/2.3.1/css/dataTables.bootstrap5.min.css" rel="stylesheet">@vite(['resources/css/app.css','resources/js/app.js']) @stack('styles')
 </head><body>
+@php
+    $businessName = \App\Models\Setting::value('business_name', 'Golden Mess');
+    $businessLogo = \App\Models\Setting::value('business_logo');
+    $businessLogoUrl = $businessLogo && \Illuminate\Support\Facades\Storage::disk('public')->exists($businessLogo)
+        ? \Illuminate\Support\Facades\Storage::disk('public')->url($businessLogo)
+        : null;
+@endphp
 <aside class="sidebar">
-    <div class="sidebar-brand"><span class="brand-mark">GM</span><span>{{ \Illuminate\Support\Str::limit(\App\Models\Setting::value('business_name', 'Golden Mess'), 18) }}</span></div>
+    <div class="sidebar-brand">@if($businessLogoUrl)<img class="brand-logo" src="{{ $businessLogoUrl }}" alt="{{ $businessName }} logo">@else<span class="brand-mark">{{ strtoupper(substr($businessName, 0, 2)) }}</span>@endif<span>{{ \Illuminate\Support\Str::limit($businessName, 18) }}</span></div>
     <nav class="nav flex-column">
         <div class="nav-label">Overview</div><a class="nav-link {{ request()->routeIs('dashboard')?'active':'' }}" href="{{ route('dashboard') }}"><i class="bi bi-grid-1x2-fill"></i> Dashboard</a>
         @if(auth()->user()->hasPermission('manage-business'))
