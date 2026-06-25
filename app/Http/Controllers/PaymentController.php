@@ -58,7 +58,7 @@ class PaymentController extends Controller
             'paymentStatus' => $totalPaid >= $packageAmount ? 'Paid' : ($totalPaid > 0 ? 'Partial' : 'Pending'),
             'business' => ['name' => Setting::value('business_name', 'Golden Mess'), 'mobile' => Setting::value('business_mobile'), 'address' => Setting::value('business_address')],
             'logoPath' => $logo && Storage::disk('public')->exists($logo) ? Storage::disk('public')->path($logo) : null,
-            'logoWebUrl' => $logo && Storage::disk('public')->exists($logo) ? Storage::disk('public')->url($logo) : null,
+            'logoWebUrl' => $logo && Storage::disk('public')->exists($logo) ? route('branding.show', ['file' => basename($logo)]) : null,
         ];
     }
 }

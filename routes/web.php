@@ -14,7 +14,18 @@ use App\Http\Controllers\SearchController;
 use App\Http\Controllers\SettingController;
 use App\Http\Controllers\HolidayController;
 use App\Http\Controllers\MealHoldController;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Route;
+
+Route::get('/branding/{file}', function (string $file) {
+    abort_if(str_contains($file, '/') || str_contains($file, '\\') || str_contains($file, '..'), 404);
+    $path = 'branding/'.$file;
+    abort_unless(Storage::disk('public')->exists($path), 404);
+
+    return response()->file(Storage::disk('public')->path($path), [
+        'Cache-Control' => 'public, max-age=31536000',
+    ]);
+})->where('file', '[A-Za-z0-9._-]+')->name('branding.show');
 
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'create'])->name('login');

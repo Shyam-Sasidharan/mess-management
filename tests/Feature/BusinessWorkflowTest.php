@@ -461,7 +461,8 @@ class BusinessWorkflowTest extends TestCase
         $this->assertStringStartsWith('branding/', $logo);
         Storage::disk('public')->assertExists($logo);
 
-        $this->get(route('settings.index'))->assertOk()->assertSee('Current logo')->assertSee($logo);
+        $this->get(route('settings.index'))->assertOk()->assertSee('Current logo')->assertSee(route('branding.show', ['file' => basename($logo)]));
+        $this->get(route('branding.show', ['file' => basename($logo)]))->assertOk();
     }
 
     public function test_customer_profile_renders_grouped_delivery_days(): void

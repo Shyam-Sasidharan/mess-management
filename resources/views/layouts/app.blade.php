@@ -10,7 +10,7 @@
     $businessName = \App\Models\Setting::value('business_name', 'Golden Mess');
     $businessLogo = \App\Models\Setting::value('business_logo');
     $businessLogoUrl = $businessLogo && \Illuminate\Support\Facades\Storage::disk('public')->exists($businessLogo)
-        ? \Illuminate\Support\Facades\Storage::disk('public')->url($businessLogo)
+        ? route('branding.show', ['file' => basename($businessLogo)])
         : null;
 @endphp
 <aside class="sidebar">
